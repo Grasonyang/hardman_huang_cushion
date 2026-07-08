@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "build": "node scripts/build-static.js",
+    "preview": "npm run build && node scripts/preview-static.js"
+  },
+  "dependencies": {
+    "three": "^0.185.1"
+  }
+}
