@@ -1,0 +1,585 @@
+import * as THREE from 'three/webgpu';
+import { OrbitControls } from '../vendor/OrbitControls.js';
+
+const viewer = document.querySelector('#viewer');
+const fallback = document.querySelector('#fallback');
+const paramsForm = document.querySelector('#paramsForm');
+const selectedName = document.querySelector('#selectedName');
+const rendererStatus = document.querySelector('#rendererStatus');
+const explodedControl = document.querySelector('#explodedAmount');
+const resetButton = document.querySelector('#resetButton');
+const exportButton = document.querySelector('#exportButton');
+
+const defaultDesignParams = {
+  base: { width: 5.8, depth: 3.0, height: 0.36, cornerRadius: 0.5 },
+  feet: { radius: 0.38, heightScale: 0.42, xOffset: 2.25, zOffset: 1.05 },
+  body: { width: 3.9, depth: 2.2, height: 0.78, roundness: 0.22 },
+  transitionLayer: { width: 4.45, depth: 2.75, height: 0.24, expansion: 0.18, roundness: 0.32 },
+  shell: { width: 5.15, depth: 3.25, height: 0.82, roundness: 0.52, taper: 0.09, sideCurve: 0.22 },
+  massageHead: { width: 3.35, depth: 1.95, height: 0.46, curvature: 0.34 },
+  spikes: { rows: 8, columns: 20, height: 0.28, radius: 0.065, spacing: 0.18, curvatureInfluence: 1.0 },
+};
+
+const designParams = structuredClone(defaultDesignParams);
+const originalY = {
+  Base: 0,
+  Feet: -0.02,
+  MachineBody: 0.48,
+  WhiteTransitionLayer: 1.24,
+  BlueOuterShell: 1.48,
+  MassageHead: 2.32,
+  MassageSpikes: 2.32,
+};
+
+const explodedLayer = {
+  Base: 0,
+  Feet: 0,
+  MachineBody: 0.35,
+  WhiteTransitionLayer: 0.85,
+  BlueOuterShell: 1.25,
+  MassageHead: 1.75,
+  MassageSpikes: 1.75,
+};
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0f17);
+
+const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
+camera.position.set(6, 4.8, 7.8);
+
+let renderer = new THREE.WebGPURenderer({ antialias: true });
+
+try {
+  await renderer.init();
+} catch (webgpuError) {
+  renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: true });
+  await renderer.init();
+  fallback.hidden = false;
+  fallback.textContent = `WebGPU 初始化失敗（${webgpuError.message}），已使用 WebGPURenderer 的 WebGL2 backend。模型仍可正常操作。`;
+}
+
+const usingWebGPU = renderer.backend?.isWebGPUBackend === true;
+const usingWebGLBackend = renderer.backend?.isWebGLBackend === true;
+
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+viewer.appendChild(renderer.domElement);
+
+if (usingWebGPU) {
+  rendererStatus.textContent = 'Renderer: Three.js WebGPURenderer active';
+} else if (usingWebGLBackend) {
+  fallback.hidden = false;
+  fallback.textContent ||= 'WebGPU 未被瀏覽器提供，已自動使用 WebGPURenderer 的 WebGL2 backend。模型仍可正常操作。';
+  rendererStatus.textContent = 'Renderer: Three.js WebGPURenderer with WebGL2 backend fallback';
+} else {
+  rendererStatus.textContent = 'Renderer: Three.js WebGPURenderer active, backend unknown';
+}
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.target.set(0, 1.45, 0);
+controls.minDistance = 4;
+controls.maxDistance = 14;
+
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let selectedMesh = null;
+let selectedOriginalEmissive = null;
+let outline = null;
+let explodedAmount = 0;
+
+const materials = {
+  base: new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.82, metalness: 0.02 }),
+  foot: new THREE.MeshStandardMaterial({ color: 0x1d1a15, roughness: 0.86, metalness: 0.01 }),
+  body: new THREE.MeshStandardMaterial({ color: 0x101114, roughness: 0.7, metalness: 0.08 }),
+  transition: new THREE.MeshStandardMaterial({ color: 0xe8e2d5, roughness: 0.42, metalness: 0.02 }),
+  shell: new THREE.MeshStandardMaterial({ color: 0x142b78, roughness: 0.48, metalness: 0.04 }),
+  head: new THREE.MeshStandardMaterial({ color: 0x17150f, roughness: 0.78, metalness: 0.02 }),
+  spikes: new THREE.MeshStandardMaterial({ color: 0x242016, roughness: 0.86, metalness: 0.01 }),
+  ground: new THREE.MeshStandardMaterial({ color: 0x202832, roughness: 0.74, metalness: 0.0 }),
+};
+
+const machineGroup = new THREE.Group();
+machineGroup.name = 'machineGroup';
+scene.add(machineGroup);
+
+const parts = new Map();
+
+function disposeObject(object) {
+  if (!object) return;
+  object.traverse((child) => {
+    if (child.geometry) child.geometry.dispose();
+  });
+}
+
+function roundedRectShape(width, depth, radius, sideCurve = 0, irregularity = 0) {
+  const shape = new THREE.Shape();
+  const halfW = width / 2;
+  const halfD = depth / 2;
+  const steps = 12;
+  const points = [];
+
+  for (let i = 0; i <= steps; i += 1) {
+    const t = i / steps;
+    const angle = Math.PI + t * Math.PI / 2;
+    points.push(cornerPoint(angle, -halfW + radius, -halfD + radius, radius, sideCurve, irregularity));
+  }
+  for (let i = 0; i <= steps; i += 1) {
+    const t = i / steps;
+    const angle = -Math.PI / 2 + t * Math.PI / 2;
+    points.push(cornerPoint(angle, halfW - radius, -halfD + radius, radius, sideCurve, irregularity));
+  }
+  for (let i = 0; i <= steps; i += 1) {
+    const t = i / steps;
+    const angle = t * Math.PI / 2;
+    points.push(cornerPoint(angle, halfW - radius, halfD - radius, radius, sideCurve, irregularity));
+  }
+  for (let i = 0; i <= steps; i += 1) {
+    const t = i / steps;
+    const angle = Math.PI / 2 + t * Math.PI / 2;
+    points.push(cornerPoint(angle, -halfW + radius, halfD - radius, radius, sideCurve, irregularity));
+  }
+
+  shape.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i += 1) shape.lineTo(points[i].x, points[i].y);
+  shape.closePath();
+  return shape;
+}
+
+function cornerPoint(angle, cx, cy, radius, sideCurve, irregularity) {
+  let x = cx + Math.cos(angle) * radius;
+  let y = cy + Math.sin(angle) * radius;
+  const normalizedY = Math.abs(y / Math.max(Math.abs(cy) + radius, 0.001));
+  x *= 1 + sideCurve * 0.06 * (1 - normalizedY * normalizedY);
+  y += Math.sin(x * 2.2) * irregularity;
+  return new THREE.Vector2(x, y);
+}
+
+function extrudeShapeGeometry(shape, height, bevelSize = 0.05) {
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: height,
+    bevelEnabled: true,
+    bevelSize,
+    bevelThickness: bevelSize,
+    bevelSegments: 8,
+  });
+  geometry.rotateX(Math.PI / 2);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function createBaseGeometry(params) {
+  const shape = new THREE.Shape();
+  const pointCount = 120;
+  const points = [];
+
+  for (let i = 0; i < pointCount; i += 1) {
+    const angle = (i / pointCount) * Math.PI * 2;
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    const xBase = Math.sign(c) * Math.pow(Math.abs(c), 0.44) * params.width / 2;
+    const z = Math.sign(s) * Math.pow(Math.abs(s), 0.56) * params.depth / 2;
+    const waist = 1 - 0.22 * (1 - Math.pow(Math.abs(z) / (params.depth / 2), 2));
+    const cornerLobe = 1 + 0.09 * Math.pow(Math.abs(s), 2);
+    points.push(new THREE.Vector2(xBase * waist * cornerLobe, z));
+  }
+
+  shape.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i += 1) shape.lineTo(points[i].x, points[i].y);
+  shape.closePath();
+  return extrudeShapeGeometry(shape, params.height, 0.06);
+}
+
+function createRoundedExtrudeGeometry(params, sideCurve = 0, irregularity = 0) {
+  const shape = roundedRectShape(params.width, params.depth, params.roundness || params.cornerRadius || 0.2, sideCurve, irregularity);
+  return extrudeShapeGeometry(shape, params.height, Math.min((params.roundness || 0.2) * 0.18, params.height * 0.25));
+}
+
+function makeSoftRectPoints(width, depth, roundness, sideCurve, count = 96) {
+  const points = [];
+  const exponent = 4.2 - THREE.MathUtils.clamp(roundness, 0.05, 0.9) * 1.7;
+  for (let i = 0; i < count; i += 1) {
+    const a = (i / count) * Math.PI * 2;
+    const c = Math.cos(a);
+    const s = Math.sin(a);
+    let x = Math.sign(c) * Math.pow(Math.abs(c), 2 / exponent) * width / 2;
+    const z = Math.sign(s) * Math.pow(Math.abs(s), 2 / exponent) * depth / 2;
+    const sideBulge = 1 + sideCurve * 0.1 * (1 - Math.pow(Math.abs(z) / (depth / 2), 2));
+    x *= sideBulge;
+    points.push(new THREE.Vector2(x, z));
+  }
+  return points;
+}
+
+function createSoftBoxGeometry(params) {
+  const points = makeSoftRectPoints(params.width, params.depth, params.roundness, params.sideCurve, 112);
+  const vertices = [];
+  const normals = [];
+  const indices = [];
+  const topScale = 1 - params.taper;
+  const bottomY = 0;
+  const topY = params.height;
+
+  for (const point of points) vertices.push(point.x, bottomY, point.y);
+  for (const point of points) vertices.push(point.x * topScale, topY, point.y * (1 - params.taper * 0.45));
+  vertices.push(0, bottomY, 0, 0, topY, 0);
+
+  const count = points.length;
+  const bottomCenter = count * 2;
+  const topCenter = count * 2 + 1;
+
+  for (let i = 0; i < count; i += 1) {
+    const next = (i + 1) % count;
+    indices.push(i, next, count + next, i, count + next, count + i);
+    indices.push(bottomCenter, next, i);
+    indices.push(topCenter, count + i, count + next);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function headSurfaceY(x, params) {
+  const normalizedX = x / (params.width / 2);
+  return params.height + params.curvature * Math.pow(Math.abs(normalizedX), 1.7);
+}
+
+function createMassageHeadGeometry(params) {
+  const segX = 36;
+  const segZ = 18;
+  const vertices = [];
+  const indices = [];
+
+  for (let zIndex = 0; zIndex <= segZ; zIndex += 1) {
+    const z = -params.depth / 2 + (zIndex / segZ) * params.depth;
+    for (let xIndex = 0; xIndex <= segX; xIndex += 1) {
+      const x = -params.width / 2 + (xIndex / segX) * params.width;
+      const edgeFalloff = 1 - Math.pow(Math.abs(z) / (params.depth / 2), 3) * 0.08;
+      vertices.push(x, headSurfaceY(x, params) * edgeFalloff, z);
+    }
+  }
+  const topCount = vertices.length / 3;
+  for (let zIndex = 0; zIndex <= segZ; zIndex += 1) {
+    const z = -params.depth / 2 + (zIndex / segZ) * params.depth;
+    for (let xIndex = 0; xIndex <= segX; xIndex += 1) {
+      const x = -params.width / 2 + (xIndex / segX) * params.width;
+      vertices.push(x, 0, z);
+    }
+  }
+
+  const row = segX + 1;
+  for (let z = 0; z < segZ; z += 1) {
+    for (let x = 0; x < segX; x += 1) {
+      const a = z * row + x;
+      const b = a + 1;
+      const c = a + row;
+      const d = c + 1;
+      indices.push(a, c, b, b, c, d);
+      indices.push(topCount + a, topCount + b, topCount + c, topCount + b, topCount + d, topCount + c);
+    }
+  }
+  for (let x = 0; x < segX; x += 1) {
+    indices.push(x, x + 1, topCount + x, x + 1, topCount + x + 1, topCount + x);
+    const back = segZ * row + x;
+    indices.push(back, topCount + back, back + 1, back + 1, topCount + back, topCount + back + 1);
+  }
+  for (let z = 0; z < segZ; z += 1) {
+    const left = z * row;
+    const right = z * row + segX;
+    indices.push(left, topCount + left, left + row, left + row, topCount + left, topCount + left + row);
+    indices.push(right, right + row, topCount + right, right + row, topCount + right + row, topCount + right);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function createFeetGroup(params) {
+  const group = new THREE.Group();
+  group.name = 'Feet';
+  for (const x of [-params.xOffset, params.xOffset]) {
+    for (const z of [-params.zOffset, params.zOffset]) {
+      const foot = new THREE.Mesh(new THREE.SphereGeometry(params.radius, 32, 16), materials.foot);
+      foot.name = 'Feet';
+      foot.scale.set(1.15, params.heightScale, 0.9);
+      foot.position.set(x, 0, z);
+      foot.castShadow = true;
+      foot.receiveShadow = true;
+      group.add(foot);
+    }
+  }
+  return group;
+}
+
+function createSpikesMesh(spikeParams, headParams) {
+  const count = spikeParams.rows * spikeParams.columns;
+  const geometry = new THREE.ConeGeometry(spikeParams.radius, spikeParams.height, 12);
+  const mesh = new THREE.InstancedMesh(geometry, materials.spikes, count);
+  mesh.name = 'MassageSpikes';
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+
+  const matrix = new THREE.Matrix4();
+  const usableWidth = Math.min(headParams.width * 0.86, (spikeParams.columns - 1) * spikeParams.spacing);
+  const usableDepth = Math.min(headParams.depth * 0.75, (spikeParams.rows - 1) * spikeParams.spacing);
+  let index = 0;
+
+  for (let row = 0; row < spikeParams.rows; row += 1) {
+    const z = -usableDepth / 2 + (row / Math.max(spikeParams.rows - 1, 1)) * usableDepth;
+    for (let col = 0; col < spikeParams.columns; col += 1) {
+      const x = -usableWidth / 2 + (col / Math.max(spikeParams.columns - 1, 1)) * usableWidth;
+      const curveY = headSurfaceY(x, headParams) * spikeParams.curvatureInfluence;
+      matrix.makeTranslation(x, curveY + spikeParams.height / 2, z);
+      mesh.setMatrixAt(index, matrix);
+      index += 1;
+    }
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  return mesh;
+}
+
+function createMesh(name, geometry, material, y) {
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = name;
+  mesh.position.y = y;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+function buildMachine() {
+  parts.clear();
+  machineGroup.clear();
+
+  const base = createMesh('Base', createBaseGeometry(designParams.base), materials.base, originalY.Base);
+  const feet = createFeetGroup(designParams.feet);
+  feet.position.y = originalY.Feet;
+  const body = createMesh('MachineBody', createRoundedExtrudeGeometry(designParams.body, 0.08, 0), materials.body, originalY.MachineBody);
+  const transition = createMesh('WhiteTransitionLayer', createRoundedExtrudeGeometry(designParams.transitionLayer, designParams.transitionLayer.expansion, 0.035), materials.transition, originalY.WhiteTransitionLayer);
+  const shell = createMesh('BlueOuterShell', createSoftBoxGeometry(designParams.shell), materials.shell, originalY.BlueOuterShell);
+  const head = createMesh('MassageHead', createMassageHeadGeometry(designParams.massageHead), materials.head, originalY.MassageHead);
+  const spikes = createSpikesMesh(designParams.spikes, designParams.massageHead);
+  spikes.position.y = originalY.MassageSpikes;
+
+  for (const object of [base, feet, body, transition, shell, head, spikes]) {
+    machineGroup.add(object);
+    parts.set(object.name, object);
+  }
+  applyExplodedView();
+}
+
+function rebuildPart(partName) {
+  const oldObject = parts.get(partName);
+  const transform = oldObject ? { position: oldObject.position.clone(), rotation: oldObject.rotation.clone(), scale: oldObject.scale.clone() } : null;
+  let newObject;
+
+  if (partName === 'Base') newObject = createMesh('Base', createBaseGeometry(designParams.base), materials.base, originalY.Base);
+  if (partName === 'Feet') newObject = createFeetGroup(designParams.feet);
+  if (partName === 'MachineBody') newObject = createMesh('MachineBody', createRoundedExtrudeGeometry(designParams.body, 0.08, 0), materials.body, originalY.MachineBody);
+  if (partName === 'WhiteTransitionLayer') newObject = createMesh('WhiteTransitionLayer', createRoundedExtrudeGeometry(designParams.transitionLayer, designParams.transitionLayer.expansion, 0.035), materials.transition, originalY.WhiteTransitionLayer);
+  if (partName === 'BlueOuterShell') newObject = createMesh('BlueOuterShell', createSoftBoxGeometry(designParams.shell), materials.shell, originalY.BlueOuterShell);
+  if (partName === 'MassageHead') newObject = createMesh('MassageHead', createMassageHeadGeometry(designParams.massageHead), materials.head, originalY.MassageHead);
+  if (partName === 'MassageSpikes') newObject = createSpikesMesh(designParams.spikes, designParams.massageHead);
+
+  if (!newObject) return;
+  if (partName === 'Feet') newObject.position.y = originalY.Feet;
+  if (partName === 'MassageSpikes') newObject.position.y = originalY.MassageSpikes;
+  if (transform) {
+    newObject.position.copy(transform.position);
+    newObject.rotation.copy(transform.rotation);
+    newObject.scale.copy(transform.scale);
+  }
+  if (oldObject) {
+    machineGroup.remove(oldObject);
+    disposeObject(oldObject);
+  }
+  machineGroup.add(newObject);
+  parts.set(partName, newObject);
+  if (selectedMesh?.name === partName) selectMesh(newObject);
+  applyExplodedView();
+}
+
+function rebuildShell() { rebuildPart('BlueOuterShell'); }
+function rebuildHeadAndSpikes() { rebuildPart('MassageHead'); rebuildPart('MassageSpikes'); }
+
+function applyExplodedView() {
+  for (const [name, object] of parts) {
+    object.position.y = originalY[name] + explodedAmount * explodedLayer[name];
+  }
+  if (outline && selectedMesh) outline.update();
+}
+
+function createGround() {
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(18, 18), materials.ground);
+  ground.name = 'GroundPlane';
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -0.26;
+  ground.receiveShadow = true;
+  scene.add(ground);
+  const grid = new THREE.GridHelper(18, 18, 0x425064, 0x202a38);
+  grid.position.y = -0.255;
+  scene.add(grid);
+}
+
+function createLights() {
+  scene.add(new THREE.HemisphereLight(0xdbeafe, 0x18202c, 2.1));
+  const key = new THREE.DirectionalLight(0xffffff, 3.3);
+  key.position.set(4.5, 7, 5);
+  key.castShadow = true;
+  key.shadow.mapSize.set(2048, 2048);
+  key.shadow.camera.left = -7;
+  key.shadow.camera.right = 7;
+  key.shadow.camera.top = 7;
+  key.shadow.camera.bottom = -7;
+  scene.add(key);
+}
+
+const controlSpec = {
+  base: { part: 'Base', fields: { width: [4.2, 7.2, 0.05], depth: [2.2, 4.6, 0.05], height: [0.18, 0.8, 0.01], cornerRadius: [0.15, 1.0, 0.01] } },
+  feet: { part: 'Feet', fields: { radius: [0.18, 0.7, 0.01], heightScale: [0.18, 0.8, 0.01], xOffset: [1.4, 3.0, 0.05], zOffset: [0.55, 1.65, 0.05] } },
+  body: { part: 'MachineBody', fields: { width: [2.4, 5.0, 0.05], depth: [1.4, 3.3, 0.05], height: [0.35, 1.4, 0.01], roundness: [0.05, 0.55, 0.01] } },
+  transitionLayer: { part: 'WhiteTransitionLayer', fields: { width: [3.2, 5.6, 0.05], depth: [2.0, 3.8, 0.05], height: [0.08, 0.55, 0.01], expansion: [-0.2, 0.55, 0.01], roundness: [0.08, 0.65, 0.01] } },
+  shell: { part: 'BlueOuterShell', customRebuild: rebuildShell, fields: { width: [3.8, 6.8, 0.05], depth: [2.4, 4.6, 0.05], height: [0.35, 1.4, 0.01], roundness: [0.08, 0.9, 0.01], taper: [-0.15, 0.35, 0.01], sideCurve: [-0.35, 0.6, 0.01] } },
+  massageHead: { customRebuild: rebuildHeadAndSpikes, fields: { width: [2.0, 4.8, 0.05], depth: [1.0, 2.8, 0.05], height: [0.2, 1.1, 0.01], curvature: [0, 0.8, 0.01] } },
+  spikes: { part: 'MassageSpikes', fields: { rows: [2, 14, 1], columns: [4, 32, 1], height: [0.06, 0.55, 0.01], radius: [0.025, 0.16, 0.005], spacing: [0.08, 0.35, 0.005], curvatureInfluence: [0.4, 1.3, 0.01] } },
+};
+
+function buildParameterPanel() {
+  paramsForm.innerHTML = '';
+  for (const [groupName, spec] of Object.entries(controlSpec)) {
+    const fieldset = document.createElement('section');
+    fieldset.className = 'param-group';
+    fieldset.innerHTML = `<h2>${labelFor(groupName)}</h2>`;
+
+    for (const [field, [min, max, step]] of Object.entries(spec.fields)) {
+      const row = document.createElement('div');
+      row.className = 'control-row';
+      const value = designParams[groupName][field];
+      row.innerHTML = `
+        <label>${field}</label>
+        <input type="range" min="${min}" max="${max}" step="${step}" value="${value}" data-group="${groupName}" data-field="${field}">
+        <input type="number" min="${min}" max="${max}" step="${step}" value="${value}" data-group="${groupName}" data-field="${field}">
+      `;
+      fieldset.appendChild(row);
+    }
+    paramsForm.appendChild(fieldset);
+  }
+}
+
+function labelFor(name) {
+  return name.replace(/([A-Z])/g, ' $1').replace(/^./, (char) => char.toUpperCase());
+}
+
+function updateLinkedInputs(group, field, value) {
+  paramsForm.querySelectorAll(`[data-group="${group}"][data-field="${field}"]`).forEach((input) => {
+    input.value = value;
+  });
+}
+
+paramsForm.addEventListener('input', (event) => {
+  const input = event.target;
+  if (!input.dataset.group) return;
+
+  const group = input.dataset.group;
+  const field = input.dataset.field;
+  const step = Number(input.step);
+  const value = step >= 1 ? Math.round(Number(input.value)) : Number(input.value);
+  designParams[group][field] = value;
+  updateLinkedInputs(group, field, value);
+
+  const spec = controlSpec[group];
+  if (spec.customRebuild) spec.customRebuild();
+  else rebuildPart(spec.part);
+});
+
+explodedControl.addEventListener('input', () => {
+  explodedAmount = Number(explodedControl.value);
+  applyExplodedView();
+});
+
+resetButton.addEventListener('click', () => {
+  Object.assign(designParams, structuredClone(defaultDesignParams));
+  explodedAmount = 0;
+  explodedControl.value = 0;
+  selectMesh(null);
+  buildParameterPanel();
+  buildMachine();
+});
+
+exportButton.addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify({ version: 'Concept A', designParams }, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = 'steady-saddle-pro-params.json';
+  anchor.click();
+  URL.revokeObjectURL(url);
+});
+
+function selectMesh(mesh) {
+  if (selectedMesh?.material?.emissive && selectedOriginalEmissive) {
+    selectedMesh.material.emissive.copy(selectedOriginalEmissive);
+  }
+  if (outline) {
+    scene.remove(outline);
+    outline.geometry.dispose();
+    outline.material.dispose();
+    outline = null;
+  }
+
+  selectedMesh = mesh;
+  selectedOriginalEmissive = null;
+  selectedName.textContent = mesh?.name || 'None';
+  if (!mesh) return;
+
+  if (mesh.material?.emissive) {
+    selectedOriginalEmissive = mesh.material.emissive.clone();
+    mesh.material.emissive.set(0x1f4fff);
+  }
+  outline = new THREE.BoxHelper(mesh, 0x75a7ff);
+  scene.add(outline);
+}
+
+renderer.domElement.addEventListener('dblclick', (event) => {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+
+  const pickable = [...parts.values()].flatMap((part) => part.type === 'Group' ? part.children : [part]);
+  const hits = raycaster.intersectObjects(pickable, false);
+  if (!hits.length) {
+    selectMesh(null);
+    return;
+  }
+  const hit = hits[0].object;
+  selectMesh(parts.get(hit.name) || hit);
+});
+
+function resize() {
+  const { clientWidth, clientHeight } = viewer;
+  camera.aspect = clientWidth / clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(clientWidth, clientHeight, false);
+}
+
+function animate() {
+  controls.update();
+  if (outline) outline.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+
+createGround();
+createLights();
+buildParameterPanel();
+buildMachine();
+resize();
+window.addEventListener('resize', resize);
+animate();
