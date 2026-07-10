@@ -22,8 +22,8 @@ const versionPresets = {
     spikes: { rows: 8, columns: 20, height: 0.28, radius: 0.065, spacing: 0.18, curvatureInfluence: 1.0 },
   },
   v2: {
-    base: { width: 5.65, depth: 2.45, height: 0.28, cornerRadius: 0.42 },
-    feet: { radius: 0.42, heightScale: 0.46, xOffset: 2.18, zOffset: 0.92 },
+    base: { width: 5.8, depth: 2.75, height: 0.22, cornerRadius: 0.5, waist: 0.34, cornerBulge: 0.22, profile: 'physical' },
+    feet: { radius: 0.43, heightScale: 0.46, xOffset: 2.25, zOffset: 1.02, flatTop: true },
     body: { width: 4.28, depth: 1.78, height: 0.58, roundness: 0.18 },
     transitionLayer: { width: 4.9, depth: 2.34, height: 0.16, expansion: 0.08, roundness: 0.36 },
     foam: { width: 5.35, depth: 2.62, cushionHeight: 0.62, headWidth: 3.85, headDepth: 1.45, headHeight: 0.55, roundness: 0.54, saddleCurvature: 0.24, edgeBlend: 0.34 },
@@ -109,6 +109,7 @@ let explodedAmount = 0;
 const materials = {
   base: new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.82, metalness: 0.02 }),
   foot: new THREE.MeshStandardMaterial({ color: 0x1d1a15, roughness: 0.86, metalness: 0.01 }),
+  footTop: new THREE.MeshStandardMaterial({ color: 0x5a554b, roughness: 0.92, metalness: 0.0 }),
   body: new THREE.MeshStandardMaterial({ color: 0x101114, roughness: 0.7, metalness: 0.08 }),
   transition: new THREE.MeshStandardMaterial({ color: 0xe8e2d5, roughness: 0.42, metalness: 0.02 }),
   shell: new THREE.MeshStandardMaterial({ color: 0x142b78, roughness: 0.48, metalness: 0.04 }),
@@ -189,6 +190,27 @@ function extrudeShapeGeometry(shape, height, bevelSize = 0.05) {
 }
 
 function createBaseGeometry(params) {
+  if (params.profile === 'physical') {
+    const shape = new THREE.Shape();
+    const halfW = params.width / 2;
+    const halfD = params.depth / 2;
+    const radius = params.cornerRadius;
+    const waist = params.waist ?? 0.3;
+    const bulge = params.cornerBulge ?? 0.18;
+
+    shape.moveTo(-halfW + radius, -halfD);
+    shape.bezierCurveTo(-halfW * 0.45, -halfD * (1 - waist), halfW * 0.45, -halfD * (1 - waist), halfW - radius, -halfD);
+    shape.quadraticCurveTo(halfW + bulge, -halfD, halfW, -halfD + radius);
+    shape.bezierCurveTo(halfW * (1 - waist * 0.26), -halfD * 0.32, halfW * (1 - waist * 0.26), halfD * 0.32, halfW, halfD - radius);
+    shape.quadraticCurveTo(halfW + bulge, halfD, halfW - radius, halfD);
+    shape.bezierCurveTo(halfW * 0.45, halfD * (1 - waist), -halfW * 0.45, halfD * (1 - waist), -halfW + radius, halfD);
+    shape.quadraticCurveTo(-halfW - bulge, halfD, -halfW, halfD - radius);
+    shape.bezierCurveTo(-halfW * (1 - waist * 0.26), halfD * 0.32, -halfW * (1 - waist * 0.26), -halfD * 0.32, -halfW, -halfD + radius);
+    shape.quadraticCurveTo(-halfW - bulge, -halfD, -halfW + radius, -halfD);
+
+    return extrudeShapeGeometry(shape, params.height, 0.035);
+  }
+
   const shape = new THREE.Shape();
   const pointCount = 120;
   const points = [];
@@ -403,13 +425,36 @@ function createFeetGroup(params) {
   group.name = 'Feet';
   for (const x of [-params.xOffset, params.xOffset]) {
     for (const z of [-params.zOffset, params.zOffset]) {
-      const foot = new THREE.Mesh(new THREE.SphereGeometry(params.radius, 32, 16), materials.foot);
-      foot.name = 'Feet';
-      foot.scale.set(1.15, params.heightScale, 0.9);
-      foot.position.set(x, 0, z);
-      foot.castShadow = true;
-      foot.receiveShadow = true;
-      group.add(foot);
+      if (params.flatTop) {
+        const height = params.radius * 1.0;
+        const side = new THREE.Mesh(new THREE.CylinderGeometry(params.radius, params.radius * 1.08, height, 40), materials.foot);
+        side.name = 'Feet';
+        side.position.set(x, height / 2 - 0.03, z);
+        side.castShadow = true;
+        side.receiveShadow = true;
+        group.add(side);
+
+        const shoulder = new THREE.Mesh(new THREE.TorusGeometry(params.radius * 0.86, params.radius * 0.09, 10, 40), materials.foot);
+        shoulder.name = 'Feet';
+        shoulder.rotation.x = Math.PI / 2;
+        shoulder.position.set(x, height - 0.02, z);
+        shoulder.castShadow = true;
+        group.add(shoulder);
+
+        const top = new THREE.Mesh(new THREE.CylinderGeometry(params.radius * 0.72, params.radius * 0.78, 0.04, 36), materials.footTop);
+        top.name = 'Feet';
+        top.position.set(x, height + 0.015, z);
+        top.castShadow = true;
+        group.add(top);
+      } else {
+        const foot = new THREE.Mesh(new THREE.SphereGeometry(params.radius, 32, 16), materials.foot);
+        foot.name = 'Feet';
+        foot.scale.set(1.15, params.heightScale, 0.9);
+        foot.position.set(x, 0, z);
+        foot.castShadow = true;
+        foot.receiveShadow = true;
+        group.add(foot);
+      }
     }
   }
   return group;
@@ -584,8 +629,11 @@ function createLights() {
 }
 
 function getControlSpec() {
+  const baseFields = currentVersion === 'v2'
+    ? { width: [4.2, 7.2, 0.05], depth: [2.0, 4.6, 0.05], height: [0.12, 0.5, 0.01], cornerRadius: [0.15, 1.0, 0.01], waist: [0, 0.55, 0.01], cornerBulge: [0, 0.45, 0.01] }
+    : { width: [4.2, 7.2, 0.05], depth: [2.0, 4.6, 0.05], height: [0.18, 0.8, 0.01], cornerRadius: [0.15, 1.0, 0.01] };
   const common = {
-    base: { part: 'Base', fields: { width: [4.2, 7.2, 0.05], depth: [2.0, 4.6, 0.05], height: [0.18, 0.8, 0.01], cornerRadius: [0.15, 1.0, 0.01] } },
+    base: { part: 'Base', fields: baseFields },
     feet: { part: 'Feet', fields: { radius: [0.18, 0.7, 0.01], heightScale: [0.18, 0.8, 0.01], xOffset: [1.4, 3.0, 0.05], zOffset: [0.55, 1.65, 0.05] } },
     body: { part: 'MachineBody', fields: { width: [2.4, 5.0, 0.05], depth: [1.2, 3.3, 0.05], height: [0.35, 1.4, 0.01], roundness: [0.05, 0.55, 0.01] } },
     transitionLayer: { part: 'WhiteTransitionLayer', fields: { width: [3.2, 5.8, 0.05], depth: [1.8, 3.8, 0.05], height: [0.08, 0.55, 0.01], expansion: [-0.2, 0.55, 0.01], roundness: [0.08, 0.65, 0.01] } },
