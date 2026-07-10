@@ -6,21 +6,35 @@ const fallback = document.querySelector('#fallback');
 const paramsForm = document.querySelector('#paramsForm');
 const selectedName = document.querySelector('#selectedName');
 const rendererStatus = document.querySelector('#rendererStatus');
+const versionSelect = document.querySelector('#versionSelect');
 const explodedControl = document.querySelector('#explodedAmount');
 const resetButton = document.querySelector('#resetButton');
 const exportButton = document.querySelector('#exportButton');
 
-const defaultDesignParams = {
-  base: { width: 5.8, depth: 3.0, height: 0.36, cornerRadius: 0.5 },
-  feet: { radius: 0.38, heightScale: 0.42, xOffset: 2.25, zOffset: 1.05 },
-  body: { width: 3.9, depth: 2.2, height: 0.78, roundness: 0.22 },
-  transitionLayer: { width: 4.45, depth: 2.75, height: 0.24, expansion: 0.18, roundness: 0.32 },
-  shell: { width: 5.15, depth: 3.25, height: 0.82, roundness: 0.52, taper: 0.09, sideCurve: 0.22 },
-  massageHead: { width: 3.35, depth: 1.95, height: 0.46, curvature: 0.34 },
-  spikes: { rows: 8, columns: 20, height: 0.28, radius: 0.065, spacing: 0.18, curvatureInfluence: 1.0 },
+const versionPresets = {
+  v1: {
+    base: { width: 5.8, depth: 3.0, height: 0.36, cornerRadius: 0.5 },
+    feet: { radius: 0.38, heightScale: 0.42, xOffset: 2.25, zOffset: 1.05 },
+    body: { width: 3.9, depth: 2.2, height: 0.78, roundness: 0.22 },
+    transitionLayer: { width: 4.45, depth: 2.75, height: 0.24, expansion: 0.18, roundness: 0.32 },
+    shell: { width: 5.15, depth: 3.25, height: 0.82, roundness: 0.52, taper: 0.09, sideCurve: 0.22 },
+    massageHead: { width: 3.35, depth: 1.95, height: 0.46, curvature: 0.34 },
+    spikes: { rows: 8, columns: 20, height: 0.28, radius: 0.065, spacing: 0.18, curvatureInfluence: 1.0 },
+  },
+  v2: {
+    base: { width: 5.65, depth: 2.45, height: 0.28, cornerRadius: 0.42 },
+    feet: { radius: 0.42, heightScale: 0.46, xOffset: 2.18, zOffset: 0.92 },
+    body: { width: 4.28, depth: 1.78, height: 0.58, roundness: 0.18 },
+    transitionLayer: { width: 4.9, depth: 2.34, height: 0.16, expansion: 0.08, roundness: 0.36 },
+    foam: { width: 5.35, depth: 2.62, cushionHeight: 0.62, headWidth: 3.85, headDepth: 1.45, headHeight: 0.55, roundness: 0.54, saddleCurvature: 0.24, edgeBlend: 0.34 },
+    guidePosts: { radius: 0.075, height: 1.02, xOffset: 1.55, rearOffset: 0.78 },
+    spikes: { rows: 7, columns: 22, height: 0.24, radius: 0.055, spacing: 0.15, curvatureInfluence: 1.0, bluntness: 0.88 },
+  },
 };
 
-const designParams = structuredClone(defaultDesignParams);
+let currentVersion = 'v2';
+let defaultDesignParams = versionPresets[currentVersion];
+let designParams = structuredClone(defaultDesignParams);
 const originalY = {
   Base: 0,
   Feet: -0.02,
@@ -29,6 +43,8 @@ const originalY = {
   BlueOuterShell: 1.48,
   MassageHead: 2.32,
   MassageSpikes: 2.32,
+  GuidePosts: 1.22,
+  PUFoamBody: 1.42,
 };
 
 const explodedLayer = {
@@ -39,6 +55,8 @@ const explodedLayer = {
   BlueOuterShell: 1.25,
   MassageHead: 1.75,
   MassageSpikes: 1.75,
+  GuidePosts: 0.15,
+  PUFoamBody: 1.35,
 };
 
 const scene = new THREE.Scene();
@@ -95,6 +113,8 @@ const materials = {
   transition: new THREE.MeshStandardMaterial({ color: 0xe8e2d5, roughness: 0.42, metalness: 0.02 }),
   shell: new THREE.MeshStandardMaterial({ color: 0x142b78, roughness: 0.48, metalness: 0.04 }),
   head: new THREE.MeshStandardMaterial({ color: 0x17150f, roughness: 0.78, metalness: 0.02 }),
+  foam: new THREE.MeshStandardMaterial({ color: 0x121a3d, roughness: 0.72, metalness: 0.01 }),
+  guidePost: new THREE.MeshStandardMaterial({ color: 0x16181d, roughness: 0.48, metalness: 0.35 }),
   spikes: new THREE.MeshStandardMaterial({ color: 0x242016, roughness: 0.86, metalness: 0.01 }),
   ground: new THREE.MeshStandardMaterial({ color: 0x202832, roughness: 0.74, metalness: 0.0 }),
 };
@@ -247,6 +267,84 @@ function headSurfaceY(x, params) {
   return params.height + params.curvature * Math.pow(Math.abs(normalizedX), 1.7);
 }
 
+function smoothstep(edge0, edge1, value) {
+  const t = THREE.MathUtils.clamp((value - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+function foamSurfaceY(x, z, params) {
+  const xEdge = params.headWidth / 2;
+  const zEdge = params.headDepth / 2;
+  const blend = Math.max(params.edgeBlend, 0.01);
+  const xMask = 1 - smoothstep(xEdge - blend, xEdge + blend, Math.abs(x));
+  const zMask = 1 - smoothstep(zEdge - blend, zEdge + blend, Math.abs(z));
+  const islandMask = xMask * zMask;
+  const saddle = params.saddleCurvature * Math.pow(Math.abs(x) / Math.max(xEdge, 0.001), 1.65);
+  const edgeSoftening = 1 - smoothstep(params.width * 0.38, params.width * 0.5, Math.abs(x)) * 0.08;
+
+  return (params.cushionHeight + islandMask * (params.headHeight + saddle)) * edgeSoftening;
+}
+
+function createPUFoamGeometry(params) {
+  const segX = 44;
+  const segZ = 24;
+  const vertices = [];
+  const indices = [];
+
+  for (let zIndex = 0; zIndex <= segZ; zIndex += 1) {
+    const v = zIndex / segZ;
+    const z = -params.depth / 2 + v * params.depth;
+    for (let xIndex = 0; xIndex <= segX; xIndex += 1) {
+      const u = xIndex / segX;
+      const x = -params.width / 2 + u * params.width;
+      const cornerRound = 1 - Math.pow(Math.abs(x) / (params.width / 2), 6) * Math.pow(Math.abs(z) / (params.depth / 2), 6) * params.roundness * 0.18;
+      vertices.push(x * cornerRound, foamSurfaceY(x, z, params), z * cornerRound);
+    }
+  }
+
+  const topCount = vertices.length / 3;
+  for (let zIndex = 0; zIndex <= segZ; zIndex += 1) {
+    const v = zIndex / segZ;
+    const z = -params.depth / 2 + v * params.depth;
+    for (let xIndex = 0; xIndex <= segX; xIndex += 1) {
+      const u = xIndex / segX;
+      const x = -params.width / 2 + u * params.width;
+      const cornerRound = 1 - Math.pow(Math.abs(x) / (params.width / 2), 6) * Math.pow(Math.abs(z) / (params.depth / 2), 6) * params.roundness * 0.18;
+      vertices.push(x * cornerRound, 0, z * cornerRound);
+    }
+  }
+
+  const row = segX + 1;
+  for (let z = 0; z < segZ; z += 1) {
+    for (let x = 0; x < segX; x += 1) {
+      const a = z * row + x;
+      const b = a + 1;
+      const c = a + row;
+      const d = c + 1;
+      indices.push(a, c, b, b, c, d);
+      indices.push(topCount + a, topCount + b, topCount + c, topCount + b, topCount + d, topCount + c);
+    }
+  }
+
+  for (let x = 0; x < segX; x += 1) {
+    indices.push(x, x + 1, topCount + x, x + 1, topCount + x + 1, topCount + x);
+    const back = segZ * row + x;
+    indices.push(back, topCount + back, back + 1, back + 1, topCount + back, topCount + back + 1);
+  }
+  for (let z = 0; z < segZ; z += 1) {
+    const left = z * row;
+    const right = z * row + segX;
+    indices.push(left, topCount + left, left + row, left + row, topCount + left, topCount + left + row);
+    indices.push(right, right + row, topCount + right, right + row, topCount + right + row, topCount + right);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
 function createMassageHeadGeometry(params) {
   const segX = 36;
   const segZ = 18;
@@ -317,24 +415,51 @@ function createFeetGroup(params) {
   return group;
 }
 
-function createSpikesMesh(spikeParams, headParams) {
+function createGuidePostsGroup(params) {
+  const group = new THREE.Group();
+  group.name = 'GuidePosts';
+  for (const x of [-params.xOffset, params.xOffset]) {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(params.radius, params.radius, params.height, 24), materials.guidePost);
+    post.name = 'GuidePosts';
+    post.position.set(x, params.height / 2, params.rearOffset);
+    post.castShadow = true;
+    post.receiveShadow = true;
+    group.add(post);
+
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(params.radius * 1.55, params.radius * 1.55, 0.055, 24), materials.guidePost);
+    cap.name = 'GuidePosts';
+    cap.position.set(x, params.height + 0.025, params.rearOffset);
+    cap.castShadow = true;
+    group.add(cap);
+  }
+  return group;
+}
+
+function createSpikesMesh(spikeParams, surfaceParams, mode = 'v1') {
   const count = spikeParams.rows * spikeParams.columns;
-  const geometry = new THREE.ConeGeometry(spikeParams.radius, spikeParams.height, 12);
+  const spikeRadius = mode === 'v2' ? spikeParams.radius * (0.75 + spikeParams.bluntness * 0.35) : spikeParams.radius;
+  const geometry = mode === 'v2'
+    ? new THREE.CapsuleGeometry(spikeRadius, Math.max(spikeParams.height - spikeRadius * 2, 0.01), 5, 12)
+    : new THREE.ConeGeometry(spikeRadius, spikeParams.height, 12);
   const mesh = new THREE.InstancedMesh(geometry, materials.spikes, count);
   mesh.name = 'MassageSpikes';
   mesh.castShadow = true;
   mesh.receiveShadow = true;
 
   const matrix = new THREE.Matrix4();
-  const usableWidth = Math.min(headParams.width * 0.86, (spikeParams.columns - 1) * spikeParams.spacing);
-  const usableDepth = Math.min(headParams.depth * 0.75, (spikeParams.rows - 1) * spikeParams.spacing);
+  const surfaceWidth = mode === 'v2' ? surfaceParams.headWidth : surfaceParams.width;
+  const surfaceDepth = mode === 'v2' ? surfaceParams.headDepth : surfaceParams.depth;
+  const usableWidth = Math.min(surfaceWidth * 0.86, (spikeParams.columns - 1) * spikeParams.spacing);
+  const usableDepth = Math.min(surfaceDepth * 0.75, (spikeParams.rows - 1) * spikeParams.spacing);
   let index = 0;
 
   for (let row = 0; row < spikeParams.rows; row += 1) {
     const z = -usableDepth / 2 + (row / Math.max(spikeParams.rows - 1, 1)) * usableDepth;
     for (let col = 0; col < spikeParams.columns; col += 1) {
       const x = -usableWidth / 2 + (col / Math.max(spikeParams.columns - 1, 1)) * usableWidth;
-      const curveY = headSurfaceY(x, headParams) * spikeParams.curvatureInfluence;
+      const curveY = mode === 'v2'
+        ? foamSurfaceY(x, z, surfaceParams) * spikeParams.curvatureInfluence
+        : headSurfaceY(x, surfaceParams) * spikeParams.curvatureInfluence;
       matrix.makeTranslation(x, curveY + spikeParams.height / 2, z);
       mesh.setMatrixAt(index, matrix);
       index += 1;
@@ -362,12 +487,24 @@ function buildMachine() {
   feet.position.y = originalY.Feet;
   const body = createMesh('MachineBody', createRoundedExtrudeGeometry(designParams.body, 0.08, 0), materials.body, originalY.MachineBody);
   const transition = createMesh('WhiteTransitionLayer', createRoundedExtrudeGeometry(designParams.transitionLayer, designParams.transitionLayer.expansion, 0.035), materials.transition, originalY.WhiteTransitionLayer);
-  const shell = createMesh('BlueOuterShell', createSoftBoxGeometry(designParams.shell), materials.shell, originalY.BlueOuterShell);
-  const head = createMesh('MassageHead', createMassageHeadGeometry(designParams.massageHead), materials.head, originalY.MassageHead);
-  const spikes = createSpikesMesh(designParams.spikes, designParams.massageHead);
-  spikes.position.y = originalY.MassageSpikes;
+  const versionObjects = [base, feet, body, transition];
 
-  for (const object of [base, feet, body, transition, shell, head, spikes]) {
+  if (currentVersion === 'v1') {
+    const shell = createMesh('BlueOuterShell', createSoftBoxGeometry(designParams.shell), materials.shell, originalY.BlueOuterShell);
+    const head = createMesh('MassageHead', createMassageHeadGeometry(designParams.massageHead), materials.head, originalY.MassageHead);
+    const spikes = createSpikesMesh(designParams.spikes, designParams.massageHead, 'v1');
+    spikes.position.y = originalY.MassageSpikes;
+    versionObjects.push(shell, head, spikes);
+  } else {
+    const posts = createGuidePostsGroup(designParams.guidePosts);
+    posts.position.y = originalY.GuidePosts;
+    const foam = createMesh('PUFoamBody', createPUFoamGeometry(designParams.foam), materials.foam, originalY.PUFoamBody);
+    const spikes = createSpikesMesh(designParams.spikes, designParams.foam, 'v2');
+    spikes.position.y = originalY.PUFoamBody;
+    versionObjects.push(posts, foam, spikes);
+  }
+
+  for (const object of versionObjects) {
     machineGroup.add(object);
     parts.set(object.name, object);
   }
@@ -385,11 +522,16 @@ function rebuildPart(partName) {
   if (partName === 'WhiteTransitionLayer') newObject = createMesh('WhiteTransitionLayer', createRoundedExtrudeGeometry(designParams.transitionLayer, designParams.transitionLayer.expansion, 0.035), materials.transition, originalY.WhiteTransitionLayer);
   if (partName === 'BlueOuterShell') newObject = createMesh('BlueOuterShell', createSoftBoxGeometry(designParams.shell), materials.shell, originalY.BlueOuterShell);
   if (partName === 'MassageHead') newObject = createMesh('MassageHead', createMassageHeadGeometry(designParams.massageHead), materials.head, originalY.MassageHead);
-  if (partName === 'MassageSpikes') newObject = createSpikesMesh(designParams.spikes, designParams.massageHead);
+  if (partName === 'GuidePosts') newObject = createGuidePostsGroup(designParams.guidePosts);
+  if (partName === 'PUFoamBody') newObject = createMesh('PUFoamBody', createPUFoamGeometry(designParams.foam), materials.foam, originalY.PUFoamBody);
+  if (partName === 'MassageSpikes') newObject = currentVersion === 'v2'
+    ? createSpikesMesh(designParams.spikes, designParams.foam, 'v2')
+    : createSpikesMesh(designParams.spikes, designParams.massageHead, 'v1');
 
   if (!newObject) return;
   if (partName === 'Feet') newObject.position.y = originalY.Feet;
-  if (partName === 'MassageSpikes') newObject.position.y = originalY.MassageSpikes;
+  if (partName === 'GuidePosts') newObject.position.y = originalY.GuidePosts;
+  if (partName === 'MassageSpikes') newObject.position.y = currentVersion === 'v2' ? originalY.PUFoamBody : originalY.MassageSpikes;
   if (transform) {
     newObject.position.copy(transform.position);
     newObject.rotation.copy(transform.rotation);
@@ -407,6 +549,7 @@ function rebuildPart(partName) {
 
 function rebuildShell() { rebuildPart('BlueOuterShell'); }
 function rebuildHeadAndSpikes() { rebuildPart('MassageHead'); rebuildPart('MassageSpikes'); }
+function rebuildFoamAndSpikes() { rebuildPart('PUFoamBody'); rebuildPart('MassageSpikes'); }
 
 function applyExplodedView() {
   for (const [name, object] of parts) {
@@ -440,19 +583,34 @@ function createLights() {
   scene.add(key);
 }
 
-const controlSpec = {
-  base: { part: 'Base', fields: { width: [4.2, 7.2, 0.05], depth: [2.2, 4.6, 0.05], height: [0.18, 0.8, 0.01], cornerRadius: [0.15, 1.0, 0.01] } },
-  feet: { part: 'Feet', fields: { radius: [0.18, 0.7, 0.01], heightScale: [0.18, 0.8, 0.01], xOffset: [1.4, 3.0, 0.05], zOffset: [0.55, 1.65, 0.05] } },
-  body: { part: 'MachineBody', fields: { width: [2.4, 5.0, 0.05], depth: [1.4, 3.3, 0.05], height: [0.35, 1.4, 0.01], roundness: [0.05, 0.55, 0.01] } },
-  transitionLayer: { part: 'WhiteTransitionLayer', fields: { width: [3.2, 5.6, 0.05], depth: [2.0, 3.8, 0.05], height: [0.08, 0.55, 0.01], expansion: [-0.2, 0.55, 0.01], roundness: [0.08, 0.65, 0.01] } },
-  shell: { part: 'BlueOuterShell', customRebuild: rebuildShell, fields: { width: [3.8, 6.8, 0.05], depth: [2.4, 4.6, 0.05], height: [0.35, 1.4, 0.01], roundness: [0.08, 0.9, 0.01], taper: [-0.15, 0.35, 0.01], sideCurve: [-0.35, 0.6, 0.01] } },
-  massageHead: { customRebuild: rebuildHeadAndSpikes, fields: { width: [2.0, 4.8, 0.05], depth: [1.0, 2.8, 0.05], height: [0.2, 1.1, 0.01], curvature: [0, 0.8, 0.01] } },
-  spikes: { part: 'MassageSpikes', fields: { rows: [2, 14, 1], columns: [4, 32, 1], height: [0.06, 0.55, 0.01], radius: [0.025, 0.16, 0.005], spacing: [0.08, 0.35, 0.005], curvatureInfluence: [0.4, 1.3, 0.01] } },
-};
+function getControlSpec() {
+  const common = {
+    base: { part: 'Base', fields: { width: [4.2, 7.2, 0.05], depth: [2.0, 4.6, 0.05], height: [0.18, 0.8, 0.01], cornerRadius: [0.15, 1.0, 0.01] } },
+    feet: { part: 'Feet', fields: { radius: [0.18, 0.7, 0.01], heightScale: [0.18, 0.8, 0.01], xOffset: [1.4, 3.0, 0.05], zOffset: [0.55, 1.65, 0.05] } },
+    body: { part: 'MachineBody', fields: { width: [2.4, 5.0, 0.05], depth: [1.2, 3.3, 0.05], height: [0.35, 1.4, 0.01], roundness: [0.05, 0.55, 0.01] } },
+    transitionLayer: { part: 'WhiteTransitionLayer', fields: { width: [3.2, 5.8, 0.05], depth: [1.8, 3.8, 0.05], height: [0.08, 0.55, 0.01], expansion: [-0.2, 0.55, 0.01], roundness: [0.08, 0.65, 0.01] } },
+  };
+
+  if (currentVersion === 'v1') {
+    return {
+      ...common,
+      shell: { part: 'BlueOuterShell', customRebuild: rebuildShell, fields: { width: [3.8, 6.8, 0.05], depth: [2.4, 4.6, 0.05], height: [0.35, 1.4, 0.01], roundness: [0.08, 0.9, 0.01], taper: [-0.15, 0.35, 0.01], sideCurve: [-0.35, 0.6, 0.01] } },
+      massageHead: { customRebuild: rebuildHeadAndSpikes, fields: { width: [2.0, 4.8, 0.05], depth: [1.0, 2.8, 0.05], height: [0.2, 1.1, 0.01], curvature: [0, 0.8, 0.01] } },
+      spikes: { part: 'MassageSpikes', fields: { rows: [2, 14, 1], columns: [4, 32, 1], height: [0.06, 0.55, 0.01], radius: [0.025, 0.16, 0.005], spacing: [0.08, 0.35, 0.005], curvatureInfluence: [0.4, 1.3, 0.01] } },
+    };
+  }
+
+  return {
+    ...common,
+    foam: { part: 'PUFoamBody', customRebuild: rebuildFoamAndSpikes, fields: { width: [4.2, 6.6, 0.05], depth: [1.9, 3.5, 0.05], cushionHeight: [0.25, 1.0, 0.01], headWidth: [2.2, 5.0, 0.05], headDepth: [0.9, 2.4, 0.05], headHeight: [0.1, 0.9, 0.01], roundness: [0.05, 0.9, 0.01], saddleCurvature: [0, 0.6, 0.01], edgeBlend: [0.05, 0.7, 0.01] } },
+    guidePosts: { part: 'GuidePosts', fields: { radius: [0.03, 0.18, 0.005], height: [0.35, 1.55, 0.01], xOffset: [0.7, 2.3, 0.05], rearOffset: [0.15, 1.25, 0.05] } },
+    spikes: { part: 'MassageSpikes', fields: { rows: [2, 14, 1], columns: [4, 32, 1], height: [0.06, 0.45, 0.01], radius: [0.025, 0.14, 0.005], spacing: [0.08, 0.28, 0.005], curvatureInfluence: [0.4, 1.25, 0.01], bluntness: [0.2, 1.0, 0.01] } },
+  };
+}
 
 function buildParameterPanel() {
   paramsForm.innerHTML = '';
-  for (const [groupName, spec] of Object.entries(controlSpec)) {
+  for (const [groupName, spec] of Object.entries(getControlSpec())) {
     const fieldset = document.createElement('section');
     fieldset.className = 'param-group';
     fieldset.innerHTML = `<h2>${labelFor(groupName)}</h2>`;
@@ -493,7 +651,7 @@ paramsForm.addEventListener('input', (event) => {
   designParams[group][field] = value;
   updateLinkedInputs(group, field, value);
 
-  const spec = controlSpec[group];
+  const spec = getControlSpec()[group];
   if (spec.customRebuild) spec.customRebuild();
   else rebuildPart(spec.part);
 });
@@ -503,8 +661,19 @@ explodedControl.addEventListener('input', () => {
   applyExplodedView();
 });
 
+versionSelect.addEventListener('change', () => {
+  currentVersion = versionSelect.value;
+  defaultDesignParams = versionPresets[currentVersion];
+  designParams = structuredClone(defaultDesignParams);
+  explodedAmount = 0;
+  explodedControl.value = 0;
+  selectMesh(null);
+  buildParameterPanel();
+  buildMachine();
+});
+
 resetButton.addEventListener('click', () => {
-  Object.assign(designParams, structuredClone(defaultDesignParams));
+  designParams = structuredClone(defaultDesignParams);
   explodedAmount = 0;
   explodedControl.value = 0;
   selectMesh(null);
@@ -513,7 +682,7 @@ resetButton.addEventListener('click', () => {
 });
 
 exportButton.addEventListener('click', () => {
-  const blob = new Blob([JSON.stringify({ version: 'Concept A', designParams }, null, 2)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify({ version: currentVersion, designParams }, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -578,6 +747,7 @@ function animate() {
 
 createGround();
 createLights();
+versionSelect.value = currentVersion;
 buildParameterPanel();
 buildMachine();
 resize();

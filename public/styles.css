@@ -17,7 +17,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -79,6 +80,14 @@ button {
 
 button:hover {
   background: #1b2839;
+}
+
+select {
+  border: 1px solid #2b394b;
+  border-radius: 0.45rem;
+  background: #101823;
+  color: #dce8f7;
+  padding: 0.35rem 0.55rem;
 }
 
 .workspace {
