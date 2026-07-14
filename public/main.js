@@ -30,9 +30,17 @@ const versionPresets = {
     guidePosts: { radius: 0.075, height: 1.02, xOffset: 1.55, rearOffset: 0.78 },
     spikes: { rows: 7, columns: 22, height: 0.24, radius: 0.055, spacing: 0.15, curvatureInfluence: 1.0, bluntness: 0.88 },
   },
+  v3: {
+    base: { width: 5.8, depth: 2.75, height: 0.22, cornerRadius: 0.5, waist: 0.34, cornerBulge: 0.22, profile: 'physical' },
+    feet: { radius: 0.43, heightScale: 0.46, xOffset: 2.25, zOffset: 1.02, flatTop: true },
+    motionUnit: { width: 4.18, depth: 1.82, height: 0.92, roundness: 0.28, topCapHeight: 0.13 },
+    transitionLayer: { width: 4.7, depth: 2.35, height: 0.14, expansion: 0.05, roundness: 0.32 },
+    upperApplication: { width: 5.35, depth: 3.0, height: 0.64, rim: 0.28, roundness: 0.38, insetDepth: 0.11, meshHeight: 0.055 },
+    meshPad: { width: 4.55, depth: 2.2, height: 0.1, rows: 17, columns: 31, sag: 0.12 },
+  },
 };
 
-let currentVersion = 'v2';
+let currentVersion = 'v3';
 let defaultDesignParams = versionPresets[currentVersion];
 let designParams = structuredClone(defaultDesignParams);
 const originalY = {
@@ -45,6 +53,10 @@ const originalY = {
   MassageSpikes: 2.32,
   GuidePosts: 1.22,
   PUFoamBody: 1.42,
+  SaddleMotionUnit: 0.48,
+  MotionTransitionLayer: 1.54,
+  UpperCoreApplication: 1.68,
+  MeshSupportPad: 1.68,
 };
 
 const explodedLayer = {
@@ -57,6 +69,10 @@ const explodedLayer = {
   MassageSpikes: 1.75,
   GuidePosts: 0.15,
   PUFoamBody: 1.35,
+  SaddleMotionUnit: 0.55,
+  MotionTransitionLayer: 0.9,
+  UpperCoreApplication: 1.35,
+  MeshSupportPad: 1.35,
 };
 
 const scene = new THREE.Scene();
@@ -117,6 +133,10 @@ const materials = {
   foam: new THREE.MeshStandardMaterial({ color: 0x121a3d, roughness: 0.72, metalness: 0.01 }),
   guidePost: new THREE.MeshStandardMaterial({ color: 0x16181d, roughness: 0.48, metalness: 0.35 }),
   spikes: new THREE.MeshStandardMaterial({ color: 0x242016, roughness: 0.86, metalness: 0.01 }),
+  motionUnit: new THREE.MeshStandardMaterial({ color: 0x111216, roughness: 0.62, metalness: 0.12 }),
+  motionCap: new THREE.MeshStandardMaterial({ color: 0x292c31, roughness: 0.45, metalness: 0.2 }),
+  application: new THREE.MeshStandardMaterial({ color: 0x172f80, roughness: 0.5, metalness: 0.03 }),
+  meshPad: new THREE.MeshStandardMaterial({ color: 0xdb777d, roughness: 0.8, metalness: 0.0 }),
   ground: new THREE.MeshStandardMaterial({ color: 0x202832, roughness: 0.74, metalness: 0.0 }),
 };
 
@@ -480,6 +500,80 @@ function createGuidePostsGroup(params) {
   return group;
 }
 
+function createSaddleMotionUnit(params) {
+  const group = new THREE.Group();
+  group.name = 'SaddleMotionUnit';
+
+  const housing = new THREE.Mesh(createRoundedExtrudeGeometry({ ...params, height: params.height, roundness: params.roundness }, 0.04, 0), materials.motionUnit);
+  housing.name = 'SaddleMotionUnit';
+  housing.position.y = params.height * 0.5;
+  housing.castShadow = true;
+  housing.receiveShadow = true;
+  group.add(housing);
+
+  const cap = new THREE.Mesh(createRoundedExtrudeGeometry({ width: params.width * 0.95, depth: params.depth * 0.92, height: params.topCapHeight, roundness: params.roundness * 0.65 }, 0, 0), materials.motionCap);
+  cap.name = 'SaddleMotionUnit';
+  cap.position.y = params.height + params.topCapHeight * 0.5;
+  cap.castShadow = true;
+  group.add(cap);
+
+  const frontPanel = new THREE.Mesh(new THREE.BoxGeometry(params.width * 0.58, 0.28, 0.035), materials.motionCap);
+  frontPanel.name = 'SaddleMotionUnit';
+  frontPanel.position.set(0, params.height * 0.5, -params.depth * 0.505);
+  frontPanel.castShadow = true;
+  group.add(frontPanel);
+
+  for (const x of [-params.width * 0.36, params.width * 0.36]) {
+    const mount = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.18, 0.1, 20), materials.motionUnit);
+    mount.name = 'SaddleMotionUnit';
+    mount.position.set(x, 0.05, 0);
+    mount.castShadow = true;
+    group.add(mount);
+  }
+  return group;
+}
+
+function createUpperCoreApplication(params, meshParams) {
+  const group = new THREE.Group();
+  group.name = 'UpperCoreApplication';
+
+  const blueFrame = new THREE.Mesh(createRoundedExtrudeGeometry({ width: params.width, depth: params.depth, height: params.height, roundness: params.roundness }, 0.06, 0), materials.application);
+  blueFrame.name = 'UpperCoreApplication';
+  blueFrame.position.y = params.height * 0.5;
+  blueFrame.castShadow = true;
+  blueFrame.receiveShadow = true;
+  group.add(blueFrame);
+
+  const meshBase = new THREE.Mesh(createRoundedExtrudeGeometry({ width: meshParams.width, depth: meshParams.depth, height: meshParams.height, roundness: Math.min(params.roundness, 0.22) }, 0, 0), materials.meshPad);
+  meshBase.name = 'MeshSupportPad';
+  meshBase.position.y = params.height + meshParams.height * 0.5 - params.insetDepth;
+  meshBase.castShadow = true;
+  group.add(meshBase);
+
+  const lineMaterial = new THREE.MeshStandardMaterial({ color: 0xf3a0a0, roughness: 0.75 });
+  const lineRadius = 0.012;
+  for (let row = 0; row < meshParams.rows; row += 1) {
+    const z = -meshParams.depth * 0.46 + (row / Math.max(meshParams.rows - 1, 1)) * meshParams.depth * 0.92;
+    const sag = meshParams.sag * (1 - Math.pow(z / (meshParams.depth * 0.5), 2));
+    const line = new THREE.Mesh(new THREE.CylinderGeometry(lineRadius, lineRadius, meshParams.width * 0.92, 8), lineMaterial);
+    line.name = 'MeshSupportPad';
+    line.rotation.z = Math.PI / 2;
+    line.position.set(0, params.height + meshParams.height - params.insetDepth - sag, z);
+    group.add(line);
+  }
+  for (let column = 0; column < meshParams.columns; column += 1) {
+    const x = -meshParams.width * 0.46 + (column / Math.max(meshParams.columns - 1, 1)) * meshParams.width * 0.92;
+    const sag = meshParams.sag * (1 - Math.pow(x / (meshParams.width * 0.5), 2));
+    const line = new THREE.Mesh(new THREE.CylinderGeometry(lineRadius, lineRadius, meshParams.depth * 0.92, 8), lineMaterial);
+    line.name = 'MeshSupportPad';
+    line.rotation.x = Math.PI / 2;
+    line.position.set(x, params.height + meshParams.height - params.insetDepth - sag, 0);
+    group.add(line);
+  }
+
+  return group;
+}
+
 function createSpikesMesh(spikeParams, surfaceParams, mode = 'v1') {
   const count = spikeParams.rows * spikeParams.columns;
   const spikeRadius = mode === 'v2' ? spikeParams.radius * (0.75 + spikeParams.bluntness * 0.35) : spikeParams.radius;
@@ -530,23 +624,32 @@ function buildMachine() {
   const base = createMesh('Base', createBaseGeometry(designParams.base), materials.base, originalY.Base);
   const feet = createFeetGroup(designParams.feet);
   feet.position.y = originalY.Feet;
-  const body = createMesh('MachineBody', createRoundedExtrudeGeometry(designParams.body, 0.08, 0), materials.body, originalY.MachineBody);
-  const transition = createMesh('WhiteTransitionLayer', createRoundedExtrudeGeometry(designParams.transitionLayer, designParams.transitionLayer.expansion, 0.035), materials.transition, originalY.WhiteTransitionLayer);
-  const versionObjects = [base, feet, body, transition];
+  const versionObjects = [base, feet];
 
   if (currentVersion === 'v1') {
+    const body = createMesh('MachineBody', createRoundedExtrudeGeometry(designParams.body, 0.08, 0), materials.body, originalY.MachineBody);
+    const transition = createMesh('WhiteTransitionLayer', createRoundedExtrudeGeometry(designParams.transitionLayer, designParams.transitionLayer.expansion, 0.035), materials.transition, originalY.WhiteTransitionLayer);
     const shell = createMesh('BlueOuterShell', createSoftBoxGeometry(designParams.shell), materials.shell, originalY.BlueOuterShell);
     const head = createMesh('MassageHead', createMassageHeadGeometry(designParams.massageHead), materials.head, originalY.MassageHead);
     const spikes = createSpikesMesh(designParams.spikes, designParams.massageHead, 'v1');
     spikes.position.y = originalY.MassageSpikes;
-    versionObjects.push(shell, head, spikes);
-  } else {
+    versionObjects.push(body, transition, shell, head, spikes);
+  } else if (currentVersion === 'v2') {
+    const body = createMesh('MachineBody', createRoundedExtrudeGeometry(designParams.body, 0.08, 0), materials.body, originalY.MachineBody);
+    const transition = createMesh('WhiteTransitionLayer', createRoundedExtrudeGeometry(designParams.transitionLayer, designParams.transitionLayer.expansion, 0.035), materials.transition, originalY.WhiteTransitionLayer);
     const posts = createGuidePostsGroup(designParams.guidePosts);
     posts.position.y = originalY.GuidePosts;
     const foam = createMesh('PUFoamBody', createPUFoamGeometry(designParams.foam), materials.foam, originalY.PUFoamBody);
     const spikes = createSpikesMesh(designParams.spikes, designParams.foam, 'v2');
     spikes.position.y = originalY.PUFoamBody;
-    versionObjects.push(posts, foam, spikes);
+    versionObjects.push(body, transition, posts, foam, spikes);
+  } else {
+    const motion = createSaddleMotionUnit(designParams.motionUnit);
+    motion.position.y = originalY.SaddleMotionUnit;
+    const transition = createMesh('MotionTransitionLayer', createRoundedExtrudeGeometry(designParams.transitionLayer, designParams.transitionLayer.expansion, 0.02), materials.transition, originalY.MotionTransitionLayer);
+    const application = createUpperCoreApplication(designParams.upperApplication, designParams.meshPad);
+    application.position.y = originalY.UpperCoreApplication;
+    versionObjects.push(motion, transition, application);
   }
 
   for (const object of versionObjects) {
@@ -569,6 +672,9 @@ function rebuildPart(partName) {
   if (partName === 'MassageHead') newObject = createMesh('MassageHead', createMassageHeadGeometry(designParams.massageHead), materials.head, originalY.MassageHead);
   if (partName === 'GuidePosts') newObject = createGuidePostsGroup(designParams.guidePosts);
   if (partName === 'PUFoamBody') newObject = createMesh('PUFoamBody', createPUFoamGeometry(designParams.foam), materials.foam, originalY.PUFoamBody);
+  if (partName === 'SaddleMotionUnit') newObject = createSaddleMotionUnit(designParams.motionUnit);
+  if (partName === 'MotionTransitionLayer') newObject = createMesh('MotionTransitionLayer', createRoundedExtrudeGeometry(designParams.transitionLayer, designParams.transitionLayer.expansion, 0.02), materials.transition, originalY.MotionTransitionLayer);
+  if (partName === 'UpperCoreApplication') newObject = createUpperCoreApplication(designParams.upperApplication, designParams.meshPad);
   if (partName === 'MassageSpikes') newObject = currentVersion === 'v2'
     ? createSpikesMesh(designParams.spikes, designParams.foam, 'v2')
     : createSpikesMesh(designParams.spikes, designParams.massageHead, 'v1');
@@ -577,6 +683,9 @@ function rebuildPart(partName) {
   if (partName === 'Feet') newObject.position.y = originalY.Feet;
   if (partName === 'GuidePosts') newObject.position.y = originalY.GuidePosts;
   if (partName === 'MassageSpikes') newObject.position.y = currentVersion === 'v2' ? originalY.PUFoamBody : originalY.MassageSpikes;
+  if (partName === 'SaddleMotionUnit') newObject.position.y = originalY.SaddleMotionUnit;
+  if (partName === 'MotionTransitionLayer') newObject.position.y = originalY.MotionTransitionLayer;
+  if (partName === 'UpperCoreApplication') newObject.position.y = originalY.UpperCoreApplication;
   if (transform) {
     newObject.position.copy(transform.position);
     newObject.rotation.copy(transform.rotation);
@@ -595,6 +704,7 @@ function rebuildPart(partName) {
 function rebuildShell() { rebuildPart('BlueOuterShell'); }
 function rebuildHeadAndSpikes() { rebuildPart('MassageHead'); rebuildPart('MassageSpikes'); }
 function rebuildFoamAndSpikes() { rebuildPart('PUFoamBody'); rebuildPart('MassageSpikes'); }
+function rebuildUpperCoreApplication() { rebuildPart('UpperCoreApplication'); }
 
 function applyExplodedView() {
   for (const [name, object] of parts) {
@@ -630,8 +740,21 @@ function createLights() {
 
 function getControlSpec() {
   const baseFields = currentVersion === 'v2'
+    || currentVersion === 'v3'
     ? { width: [4.2, 7.2, 0.05], depth: [2.0, 4.6, 0.05], height: [0.12, 0.5, 0.01], cornerRadius: [0.15, 1.0, 0.01], waist: [0, 0.55, 0.01], cornerBulge: [0, 0.45, 0.01] }
     : { width: [4.2, 7.2, 0.05], depth: [2.0, 4.6, 0.05], height: [0.18, 0.8, 0.01], cornerRadius: [0.15, 1.0, 0.01] };
+
+  if (currentVersion === 'v3') {
+    return {
+      base: { part: 'Base', fields: baseFields },
+      feet: { part: 'Feet', fields: { radius: [0.22, 0.7, 0.01], heightScale: [0.18, 0.8, 0.01], xOffset: [1.4, 3.0, 0.05], zOffset: [0.55, 1.65, 0.05] } },
+      motionUnit: { part: 'SaddleMotionUnit', fields: { width: [2.8, 5.2, 0.05], depth: [1.2, 3.0, 0.05], height: [0.45, 1.5, 0.01], roundness: [0.05, 0.6, 0.01], topCapHeight: [0.05, 0.3, 0.01] } },
+      transitionLayer: { part: 'MotionTransitionLayer', fields: { width: [3.4, 5.8, 0.05], depth: [1.8, 3.8, 0.05], height: [0.06, 0.45, 0.01], expansion: [-0.2, 0.55, 0.01], roundness: [0.08, 0.65, 0.01] } },
+      upperApplication: { part: 'UpperCoreApplication', customRebuild: rebuildUpperCoreApplication, fields: { width: [4.0, 6.8, 0.05], depth: [2.1, 4.2, 0.05], height: [0.3, 1.1, 0.01], roundness: [0.08, 0.7, 0.01], insetDepth: [0, 0.3, 0.01] } },
+      meshPad: { customRebuild: rebuildUpperCoreApplication, fields: { width: [3.0, 6.0, 0.05], depth: [1.2, 3.4, 0.05], height: [0.03, 0.25, 0.01], rows: [6, 28, 1], columns: [8, 42, 1], sag: [0, 0.35, 0.01] } },
+    };
+  }
+
   const common = {
     base: { part: 'Base', fields: baseFields },
     feet: { part: 'Feet', fields: { radius: [0.18, 0.7, 0.01], heightScale: [0.18, 0.8, 0.01], xOffset: [1.4, 3.0, 0.05], zOffset: [0.55, 1.65, 0.05] } },
