@@ -31,11 +31,11 @@ const versionPresets = {
     spikes: { rows: 7, columns: 22, height: 0.24, radius: 0.055, spacing: 0.15, curvatureInfluence: 1.0, bluntness: 0.88 },
   },
   v3: {
-    base: { width: 5.8, depth: 2.75, height: 0.22, cornerRadius: 0.5, waist: 0.34, cornerBulge: 0.22, profile: 'physical' },
-    feet: { radius: 0.43, heightScale: 0.46, xOffset: 2.25, zOffset: 1.02, flatTop: true },
+    base: { width: 5.8, depth: 2.75, height: 0.18, cornerRadius: 0.52, waist: 0.42, cornerBulge: 0.26, profile: 'physical' },
+    feet: { radius: 0.48, heightScale: 0.52, xOffset: 2.28, zOffset: 1.04, style: 'spherical', mountRadius: 0.3 },
     motionUnit: { width: 4.18, depth: 1.82, height: 0.92, roundness: 0.28, topCapHeight: 0.13 },
     transitionLayer: { width: 4.7, depth: 2.35, height: 0.14, expansion: 0.05, roundness: 0.32 },
-    upperApplication: { width: 5.35, depth: 3.0, height: 0.64, rim: 0.28, roundness: 0.38, insetDepth: 0.11, meshHeight: 0.055 },
+    upperApplication: { width: 5.35, depth: 3.0, height: 0.68, roundness: 0.66, taper: 0.12, sideCurve: 0.28, insetDepth: 0.1 },
     meshPad: { width: 4.55, depth: 2.2, height: 0.1, rows: 17, columns: 31, sag: 0.12 },
   },
 };
@@ -466,6 +466,21 @@ function createFeetGroup(params) {
         top.position.set(x, height + 0.015, z);
         top.castShadow = true;
         group.add(top);
+      } else if (params.style === 'spherical') {
+        const mount = new THREE.Mesh(new THREE.CylinderGeometry(params.mountRadius, params.mountRadius * 1.12, 0.075, 32), materials.base);
+        mount.name = 'Feet';
+        mount.position.set(x, 0.015, z);
+        mount.castShadow = true;
+        mount.receiveShadow = true;
+        group.add(mount);
+
+        const foot = new THREE.Mesh(new THREE.SphereGeometry(params.radius, 36, 22), materials.foot);
+        foot.name = 'Feet';
+        foot.scale.set(1.06, params.heightScale, 1.06);
+        foot.position.set(x, 0, z);
+        foot.castShadow = true;
+        foot.receiveShadow = true;
+        group.add(foot);
       } else {
         const foot = new THREE.Mesh(new THREE.SphereGeometry(params.radius, 32, 16), materials.foot);
         foot.name = 'Feet';
@@ -537,7 +552,7 @@ function createUpperCoreApplication(params, meshParams) {
   const group = new THREE.Group();
   group.name = 'UpperCoreApplication';
 
-  const blueFrame = new THREE.Mesh(createRoundedExtrudeGeometry({ width: params.width, depth: params.depth, height: params.height, roundness: params.roundness }, 0.06, 0), materials.application);
+  const blueFrame = new THREE.Mesh(createSoftBoxGeometry(params), materials.application);
   blueFrame.name = 'UpperCoreApplication';
   blueFrame.position.y = params.height * 0.5;
   blueFrame.castShadow = true;
@@ -750,7 +765,7 @@ function getControlSpec() {
       feet: { part: 'Feet', fields: { radius: [0.22, 0.7, 0.01], heightScale: [0.18, 0.8, 0.01], xOffset: [1.4, 3.0, 0.05], zOffset: [0.55, 1.65, 0.05] } },
       motionUnit: { part: 'SaddleMotionUnit', fields: { width: [2.8, 5.2, 0.05], depth: [1.2, 3.0, 0.05], height: [0.45, 1.5, 0.01], roundness: [0.05, 0.6, 0.01], topCapHeight: [0.05, 0.3, 0.01] } },
       transitionLayer: { part: 'MotionTransitionLayer', fields: { width: [3.4, 5.8, 0.05], depth: [1.8, 3.8, 0.05], height: [0.06, 0.45, 0.01], expansion: [-0.2, 0.55, 0.01], roundness: [0.08, 0.65, 0.01] } },
-      upperApplication: { part: 'UpperCoreApplication', customRebuild: rebuildUpperCoreApplication, fields: { width: [4.0, 6.8, 0.05], depth: [2.1, 4.2, 0.05], height: [0.3, 1.1, 0.01], roundness: [0.08, 0.7, 0.01], insetDepth: [0, 0.3, 0.01] } },
+      upperApplication: { part: 'UpperCoreApplication', customRebuild: rebuildUpperCoreApplication, fields: { width: [4.0, 6.8, 0.05], depth: [2.1, 4.2, 0.05], height: [0.3, 1.1, 0.01], roundness: [0.08, 0.9, 0.01], taper: [-0.1, 0.3, 0.01], sideCurve: [-0.2, 0.6, 0.01], insetDepth: [0, 0.3, 0.01] } },
       meshPad: { customRebuild: rebuildUpperCoreApplication, fields: { width: [3.0, 6.0, 0.05], depth: [1.2, 3.4, 0.05], height: [0.03, 0.25, 0.01], rows: [6, 28, 1], columns: [8, 42, 1], sag: [0, 0.35, 0.01] } },
     };
   }
