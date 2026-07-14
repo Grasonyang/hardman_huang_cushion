@@ -31,12 +31,13 @@ const versionPresets = {
     spikes: { rows: 7, columns: 22, height: 0.24, radius: 0.055, spacing: 0.15, curvatureInfluence: 1.0, bluntness: 0.88 },
   },
   v3: {
-    base: { width: 5.8, depth: 2.75, height: 0.18, cornerRadius: 0.52, waist: 0.42, cornerBulge: 0.26, profile: 'physical' },
-    feet: { radius: 0.48, heightScale: 0.52, xOffset: 2.28, zOffset: 1.04, style: 'spherical', mountRadius: 0.3 },
-    motionUnit: { width: 4.18, depth: 1.82, height: 0.92, roundness: 0.28, topCapHeight: 0.13 },
-    transitionLayer: { width: 4.7, depth: 2.35, height: 0.14, expansion: 0.05, roundness: 0.32 },
-    upperApplication: { width: 5.35, depth: 3.0, height: 0.68, roundness: 0.66, taper: 0.12, sideCurve: 0.28, insetDepth: 0.1 },
-    meshPad: { width: 4.55, depth: 2.2, height: 0.1, rows: 17, columns: 31, sag: 0.12 },
+    base: { width: 6.0, depth: 3.65, height: 0.18, cornerRadius: 0.58, waist: 0.34, cornerBulge: 0.24, profile: 'physical' },
+    feet: { radius: 0.45, heightScale: 0.72, xOffset: 2.48, zOffset: 1.43, style: 'spherical', mountRadius: 0.32 },
+    motionUnit: { width: 4.35, depth: 2.28, height: 0.92, roundness: 0.28, topCapHeight: 0.13 },
+    supportPosts: { radius: 0.085, height: 1.5, xOffset: 2.2, zOffset: 1.24, collarRadius: 0.16 },
+    transitionLayer: { width: 4.9, depth: 2.8, height: 0.14, expansion: 0.05, roundness: 0.34 },
+    upperApplication: { width: 5.8, depth: 3.55, height: 0.68, roundness: 0.66, taper: 0.12, sideCurve: 0.28, insetDepth: 0.1 },
+    meshPad: { width: 4.9, depth: 2.65, height: 0.1, rows: 17, columns: 31, sag: 0.12 },
   },
 };
 
@@ -57,6 +58,7 @@ const originalY = {
   MotionTransitionLayer: 1.54,
   UpperCoreApplication: 1.68,
   MeshSupportPad: 1.68,
+  InterfacePosts: 0.08,
 };
 
 const explodedLayer = {
@@ -73,6 +75,7 @@ const explodedLayer = {
   MotionTransitionLayer: 0.9,
   UpperCoreApplication: 1.35,
   MeshSupportPad: 1.35,
+  InterfacePosts: 0.18,
 };
 
 const scene = new THREE.Scene();
@@ -137,6 +140,7 @@ const materials = {
   motionCap: new THREE.MeshStandardMaterial({ color: 0x292c31, roughness: 0.45, metalness: 0.2 }),
   application: new THREE.MeshStandardMaterial({ color: 0x172f80, roughness: 0.5, metalness: 0.03 }),
   meshPad: new THREE.MeshStandardMaterial({ color: 0xdb777d, roughness: 0.8, metalness: 0.0 }),
+  supportPost: new THREE.MeshStandardMaterial({ color: 0x9dc2d7, roughness: 0.32, metalness: 0.12, transparent: true, opacity: 0.78 }),
   ground: new THREE.MeshStandardMaterial({ color: 0x202832, roughness: 0.74, metalness: 0.0 }),
 };
 
@@ -145,6 +149,8 @@ machineGroup.name = 'machineGroup';
 scene.add(machineGroup);
 
 const parts = new Map();
+let groundPlane;
+let groundGrid;
 
 function disposeObject(object) {
   if (!object) return;
@@ -477,7 +483,7 @@ function createFeetGroup(params) {
         const foot = new THREE.Mesh(new THREE.SphereGeometry(params.radius, 36, 22), materials.foot);
         foot.name = 'Feet';
         foot.scale.set(1.06, params.heightScale, 1.06);
-        foot.position.set(x, 0, z);
+        foot.position.set(x, -params.radius * params.heightScale * 0.82, z);
         foot.castShadow = true;
         foot.receiveShadow = true;
         group.add(foot);
@@ -512,6 +518,32 @@ function createGuidePostsGroup(params) {
     cap.castShadow = true;
     group.add(cap);
   }
+  return group;
+}
+
+function createInterfacePostsGroup(params) {
+  const group = new THREE.Group();
+  group.name = 'InterfacePosts';
+
+  for (const x of [-params.xOffset, params.xOffset]) {
+    for (const z of [-params.zOffset, params.zOffset]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(params.radius, params.radius, params.height, 24), materials.supportPost);
+      post.name = 'InterfacePosts';
+      post.position.set(x, params.height / 2, z);
+      post.castShadow = true;
+      post.receiveShadow = true;
+      group.add(post);
+
+      for (const y of [0.03, params.height - 0.03]) {
+        const collar = new THREE.Mesh(new THREE.CylinderGeometry(params.collarRadius, params.collarRadius, 0.065, 28), materials.guidePost);
+        collar.name = 'InterfacePosts';
+        collar.position.set(x, y, z);
+        collar.castShadow = true;
+        group.add(collar);
+      }
+    }
+  }
+
   return group;
 }
 
@@ -636,6 +668,10 @@ function buildMachine() {
   parts.clear();
   machineGroup.clear();
 
+  const groundY = currentVersion === 'v3' ? -0.64 : -0.26;
+  if (groundPlane) groundPlane.position.y = groundY;
+  if (groundGrid) groundGrid.position.y = groundY + 0.005;
+
   const base = createMesh('Base', createBaseGeometry(designParams.base), materials.base, originalY.Base);
   const feet = createFeetGroup(designParams.feet);
   feet.position.y = originalY.Feet;
@@ -661,10 +697,12 @@ function buildMachine() {
   } else {
     const motion = createSaddleMotionUnit(designParams.motionUnit);
     motion.position.y = originalY.SaddleMotionUnit;
+    const posts = createInterfacePostsGroup(designParams.supportPosts);
+    posts.position.y = originalY.InterfacePosts;
     const transition = createMesh('MotionTransitionLayer', createRoundedExtrudeGeometry(designParams.transitionLayer, designParams.transitionLayer.expansion, 0.02), materials.transition, originalY.MotionTransitionLayer);
     const application = createUpperCoreApplication(designParams.upperApplication, designParams.meshPad);
     application.position.y = originalY.UpperCoreApplication;
-    versionObjects.push(motion, transition, application);
+    versionObjects.push(motion, posts, transition, application);
   }
 
   for (const object of versionObjects) {
@@ -688,6 +726,7 @@ function rebuildPart(partName) {
   if (partName === 'GuidePosts') newObject = createGuidePostsGroup(designParams.guidePosts);
   if (partName === 'PUFoamBody') newObject = createMesh('PUFoamBody', createPUFoamGeometry(designParams.foam), materials.foam, originalY.PUFoamBody);
   if (partName === 'SaddleMotionUnit') newObject = createSaddleMotionUnit(designParams.motionUnit);
+  if (partName === 'InterfacePosts') newObject = createInterfacePostsGroup(designParams.supportPosts);
   if (partName === 'MotionTransitionLayer') newObject = createMesh('MotionTransitionLayer', createRoundedExtrudeGeometry(designParams.transitionLayer, designParams.transitionLayer.expansion, 0.02), materials.transition, originalY.MotionTransitionLayer);
   if (partName === 'UpperCoreApplication') newObject = createUpperCoreApplication(designParams.upperApplication, designParams.meshPad);
   if (partName === 'MassageSpikes') newObject = currentVersion === 'v2'
@@ -699,6 +738,7 @@ function rebuildPart(partName) {
   if (partName === 'GuidePosts') newObject.position.y = originalY.GuidePosts;
   if (partName === 'MassageSpikes') newObject.position.y = currentVersion === 'v2' ? originalY.PUFoamBody : originalY.MassageSpikes;
   if (partName === 'SaddleMotionUnit') newObject.position.y = originalY.SaddleMotionUnit;
+  if (partName === 'InterfacePosts') newObject.position.y = originalY.InterfacePosts;
   if (partName === 'MotionTransitionLayer') newObject.position.y = originalY.MotionTransitionLayer;
   if (partName === 'UpperCoreApplication') newObject.position.y = originalY.UpperCoreApplication;
   if (transform) {
@@ -729,15 +769,15 @@ function applyExplodedView() {
 }
 
 function createGround() {
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(18, 18), materials.ground);
-  ground.name = 'GroundPlane';
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -0.26;
-  ground.receiveShadow = true;
-  scene.add(ground);
-  const grid = new THREE.GridHelper(18, 18, 0x425064, 0x202a38);
-  grid.position.y = -0.255;
-  scene.add(grid);
+  groundPlane = new THREE.Mesh(new THREE.PlaneGeometry(18, 18), materials.ground);
+  groundPlane.name = 'GroundPlane';
+  groundPlane.rotation.x = -Math.PI / 2;
+  groundPlane.position.y = -0.64;
+  groundPlane.receiveShadow = true;
+  scene.add(groundPlane);
+  groundGrid = new THREE.GridHelper(18, 18, 0x425064, 0x202a38);
+  groundGrid.position.y = -0.635;
+  scene.add(groundGrid);
 }
 
 function createLights() {
@@ -764,6 +804,7 @@ function getControlSpec() {
       base: { part: 'Base', fields: baseFields },
       feet: { part: 'Feet', fields: { radius: [0.22, 0.7, 0.01], heightScale: [0.18, 0.8, 0.01], xOffset: [1.4, 3.0, 0.05], zOffset: [0.55, 1.65, 0.05] } },
       motionUnit: { part: 'SaddleMotionUnit', fields: { width: [2.8, 5.2, 0.05], depth: [1.2, 3.0, 0.05], height: [0.45, 1.5, 0.01], roundness: [0.05, 0.6, 0.01], topCapHeight: [0.05, 0.3, 0.01] } },
+      supportPosts: { part: 'InterfacePosts', fields: { radius: [0.035, 0.16, 0.005], height: [0.6, 2.0, 0.01], xOffset: [1.4, 2.7, 0.05], zOffset: [0.65, 1.6, 0.05], collarRadius: [0.08, 0.28, 0.01] } },
       transitionLayer: { part: 'MotionTransitionLayer', fields: { width: [3.4, 5.8, 0.05], depth: [1.8, 3.8, 0.05], height: [0.06, 0.45, 0.01], expansion: [-0.2, 0.55, 0.01], roundness: [0.08, 0.65, 0.01] } },
       upperApplication: { part: 'UpperCoreApplication', customRebuild: rebuildUpperCoreApplication, fields: { width: [4.0, 6.8, 0.05], depth: [2.1, 4.2, 0.05], height: [0.3, 1.1, 0.01], roundness: [0.08, 0.9, 0.01], taper: [-0.1, 0.3, 0.01], sideCurve: [-0.2, 0.6, 0.01], insetDepth: [0, 0.3, 0.01] } },
       meshPad: { customRebuild: rebuildUpperCoreApplication, fields: { width: [3.0, 6.0, 0.05], depth: [1.2, 3.4, 0.05], height: [0.03, 0.25, 0.01], rows: [6, 28, 1], columns: [8, 42, 1], sag: [0, 0.35, 0.01] } },
