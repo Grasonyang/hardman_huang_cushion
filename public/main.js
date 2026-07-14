@@ -36,8 +36,8 @@ const versionPresets = {
     motionUnit: { width: 4.35, depth: 2.28, height: 0.92, roundness: 0.28, topCapHeight: 0.13 },
     supportPosts: { radius: 0.085, height: 1.5, xOffset: 2.2, zOffset: 1.24, collarRadius: 0.16 },
     transitionLayer: { width: 4.9, depth: 2.8, height: 0.14, expansion: 0.05, roundness: 0.34 },
-    upperApplication: { width: 5.8, depth: 3.55, height: 0.68, roundness: 0.66, taper: 0.12, sideCurve: 0.28, insetDepth: 0.1 },
-    meshPad: { width: 4.9, depth: 2.65, height: 0.1, rows: 17, columns: 31, sag: 0.12 },
+    upperApplication: { width: 5.8, depth: 3.55, cushionHeight: 0.64, headWidth: 4.15, headDepth: 2.0, headHeight: 0.48, roundness: 0.64, saddleCurvature: 0.28, edgeBlend: 0.42 },
+    upperSpikes: { rows: 8, columns: 22, height: 0.24, radius: 0.06, spacing: 0.16, curvatureInfluence: 1.0, bluntness: 0.9 },
   },
 };
 
@@ -59,6 +59,7 @@ const originalY = {
   UpperCoreApplication: 1.68,
   MeshSupportPad: 1.68,
   InterfacePosts: 0.08,
+  UpperMassageSpikes: 1.68,
 };
 
 const explodedLayer = {
@@ -76,6 +77,7 @@ const explodedLayer = {
   UpperCoreApplication: 1.35,
   MeshSupportPad: 1.35,
   InterfacePosts: 0.18,
+  UpperMassageSpikes: 1.35,
 };
 
 const scene = new THREE.Scene();
@@ -700,9 +702,11 @@ function buildMachine() {
     const posts = createInterfacePostsGroup(designParams.supportPosts);
     posts.position.y = originalY.InterfacePosts;
     const transition = createMesh('MotionTransitionLayer', createRoundedExtrudeGeometry(designParams.transitionLayer, designParams.transitionLayer.expansion, 0.02), materials.transition, originalY.MotionTransitionLayer);
-    const application = createUpperCoreApplication(designParams.upperApplication, designParams.meshPad);
-    application.position.y = originalY.UpperCoreApplication;
-    versionObjects.push(motion, posts, transition, application);
+    const application = createMesh('UpperCoreApplication', createPUFoamGeometry(designParams.upperApplication), materials.application, originalY.UpperCoreApplication);
+    const spikes = createSpikesMesh(designParams.upperSpikes, designParams.upperApplication, 'v2');
+    spikes.name = 'UpperMassageSpikes';
+    spikes.position.y = originalY.UpperMassageSpikes;
+    versionObjects.push(motion, posts, transition, application, spikes);
   }
 
   for (const object of versionObjects) {
@@ -728,7 +732,11 @@ function rebuildPart(partName) {
   if (partName === 'SaddleMotionUnit') newObject = createSaddleMotionUnit(designParams.motionUnit);
   if (partName === 'InterfacePosts') newObject = createInterfacePostsGroup(designParams.supportPosts);
   if (partName === 'MotionTransitionLayer') newObject = createMesh('MotionTransitionLayer', createRoundedExtrudeGeometry(designParams.transitionLayer, designParams.transitionLayer.expansion, 0.02), materials.transition, originalY.MotionTransitionLayer);
-  if (partName === 'UpperCoreApplication') newObject = createUpperCoreApplication(designParams.upperApplication, designParams.meshPad);
+  if (partName === 'UpperCoreApplication') newObject = createMesh('UpperCoreApplication', createPUFoamGeometry(designParams.upperApplication), materials.application, originalY.UpperCoreApplication);
+  if (partName === 'UpperMassageSpikes') {
+    newObject = createSpikesMesh(designParams.upperSpikes, designParams.upperApplication, 'v2');
+    newObject.name = 'UpperMassageSpikes';
+  }
   if (partName === 'MassageSpikes') newObject = currentVersion === 'v2'
     ? createSpikesMesh(designParams.spikes, designParams.foam, 'v2')
     : createSpikesMesh(designParams.spikes, designParams.massageHead, 'v1');
@@ -741,6 +749,7 @@ function rebuildPart(partName) {
   if (partName === 'InterfacePosts') newObject.position.y = originalY.InterfacePosts;
   if (partName === 'MotionTransitionLayer') newObject.position.y = originalY.MotionTransitionLayer;
   if (partName === 'UpperCoreApplication') newObject.position.y = originalY.UpperCoreApplication;
+  if (partName === 'UpperMassageSpikes') newObject.position.y = originalY.UpperMassageSpikes;
   if (transform) {
     newObject.position.copy(transform.position);
     newObject.rotation.copy(transform.rotation);
@@ -759,7 +768,7 @@ function rebuildPart(partName) {
 function rebuildShell() { rebuildPart('BlueOuterShell'); }
 function rebuildHeadAndSpikes() { rebuildPart('MassageHead'); rebuildPart('MassageSpikes'); }
 function rebuildFoamAndSpikes() { rebuildPart('PUFoamBody'); rebuildPart('MassageSpikes'); }
-function rebuildUpperCoreApplication() { rebuildPart('UpperCoreApplication'); }
+function rebuildUpperCoreApplication() { rebuildPart('UpperCoreApplication'); rebuildPart('UpperMassageSpikes'); }
 
 function applyExplodedView() {
   for (const [name, object] of parts) {
@@ -806,8 +815,8 @@ function getControlSpec() {
       motionUnit: { part: 'SaddleMotionUnit', fields: { width: [2.8, 5.2, 0.05], depth: [1.2, 3.0, 0.05], height: [0.45, 1.5, 0.01], roundness: [0.05, 0.6, 0.01], topCapHeight: [0.05, 0.3, 0.01] } },
       supportPosts: { part: 'InterfacePosts', fields: { radius: [0.035, 0.16, 0.005], height: [0.6, 2.0, 0.01], xOffset: [1.4, 2.7, 0.05], zOffset: [0.65, 1.6, 0.05], collarRadius: [0.08, 0.28, 0.01] } },
       transitionLayer: { part: 'MotionTransitionLayer', fields: { width: [3.4, 5.8, 0.05], depth: [1.8, 3.8, 0.05], height: [0.06, 0.45, 0.01], expansion: [-0.2, 0.55, 0.01], roundness: [0.08, 0.65, 0.01] } },
-      upperApplication: { part: 'UpperCoreApplication', customRebuild: rebuildUpperCoreApplication, fields: { width: [4.0, 6.8, 0.05], depth: [2.1, 4.2, 0.05], height: [0.3, 1.1, 0.01], roundness: [0.08, 0.9, 0.01], taper: [-0.1, 0.3, 0.01], sideCurve: [-0.2, 0.6, 0.01], insetDepth: [0, 0.3, 0.01] } },
-      meshPad: { customRebuild: rebuildUpperCoreApplication, fields: { width: [3.0, 6.0, 0.05], depth: [1.2, 3.4, 0.05], height: [0.03, 0.25, 0.01], rows: [6, 28, 1], columns: [8, 42, 1], sag: [0, 0.35, 0.01] } },
+      upperApplication: { part: 'UpperCoreApplication', customRebuild: rebuildUpperCoreApplication, fields: { width: [4.2, 6.8, 0.05], depth: [2.2, 4.4, 0.05], cushionHeight: [0.25, 1.0, 0.01], headWidth: [2.4, 5.2, 0.05], headDepth: [1.0, 2.8, 0.05], headHeight: [0.1, 0.9, 0.01], roundness: [0.05, 0.9, 0.01], saddleCurvature: [0, 0.65, 0.01], edgeBlend: [0.05, 0.8, 0.01] } },
+      upperSpikes: { part: 'UpperMassageSpikes', fields: { rows: [2, 14, 1], columns: [4, 32, 1], height: [0.06, 0.45, 0.01], radius: [0.025, 0.14, 0.005], spacing: [0.08, 0.3, 0.005], curvatureInfluence: [0.4, 1.25, 0.01], bluntness: [0.2, 1.0, 0.01] } },
     };
   }
 
